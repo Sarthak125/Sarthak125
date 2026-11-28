@@ -103,8 +103,9 @@ export function Help() {
         </div>
         <ul className="help-list">
           <li>
-            <b>Not in the free feed:</b> live car positions on the track map, car speed and pedals, and pit stop times need an F1 TV
-            subscription. They fill in from OpenF1 about 30 minutes after the session.
+            <b>Not in the free feed:</b> live car positions on the track map, car speed and pedals, and how long a car stood still in its pit
+            box need an F1 TV subscription. They fill in from OpenF1 about 30 minutes after the session. Pit lane times (entry to exit) are in
+            the free feed and show live.
           </li>
           <li>
             <b>Reloading is safe:</b> laps recorded so far are kept on your device, so the gap chart and sector colours carry on after a reload
@@ -240,7 +241,7 @@ export function Help() {
             window; if that is unavailable too, pages show when free access returns and fill in by themselves.
           </dd>
           <dt>Why do some details only appear after the session?</dt>
-          <dd>Car positions, speed and pit stop times are not in F1's free feed. They come from OpenF1 once it opens up again.</dd>
+          <dd>Car positions, speed and stationary pit stop times are not in F1's free feed. They come from OpenF1 once it opens up again. Pit lane times are live.</dd>
           <dt>Times look wrong.</dt>
           <dd>All times are in your device's time zone. Weather days use the circuit's local date.</dd>
           <dt>Do I need an account?</dt>

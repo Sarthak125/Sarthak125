@@ -21,7 +21,7 @@ import { classify, type ClassifiedMsg } from '../lib/raceControl';
 import { teamColour } from '../lib/teams';
 import { usePoll } from './usePoll';
 import { useF1Feed } from '../api/f1live';
-import { feedDrivers, feedLaps, feedMessages, feedPositionTraces, feedProgress, feedQuali, feedRadio, feedRows, feedWeather } from '../lib/f1adapter';
+import { feedDrivers, feedLaps, feedMessages, feedPits, feedPositionTraces, feedProgress, feedQuali, feedRadio, feedRows, feedWeather } from '../lib/f1adapter';
 import { getSettings } from '../lib/settings';
 import { useQuery } from '@tanstack/react-query';
 
@@ -348,7 +348,7 @@ export function useLiveTiming(session: Session | undefined, live: boolean, carDr
       updatedAt: feed.updatedAt,
       driversByNumber: new Map(drivers.map((d) => [d.driver_number, d])),
       laps: feedLaps(feed),
-      pits: [] as PitDetail[],
+      pits: feedPits(feed),
       source: 'f1' as const,
       radio: feedRadio(feed),
       quali: isQualiSession ? feedQuali(feed) : null,

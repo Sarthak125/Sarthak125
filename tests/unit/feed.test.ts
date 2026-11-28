@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import snapshot from '../fixtures/feed-snapshot.json';
-import { mergeF1, parseLapTime, type FeedSnapshot } from '../../src/api/f1live';
-import { feedDrivers, feedMessages, feedRows, feedSession, feedWeather } from '../../src/lib/f1adapter';
+import { addPits, mergeF1, parseLapTime, realLap, type FeedSnapshot } from '../../src/api/f1live';
+import { feedDrivers, feedMessages, feedPits, feedRows, feedSession, feedWeather } from '../../src/lib/f1adapter';
 
-const snap = (state: object): FeedSnapshot => ({ status: 'live', delay: 0, state: state as FeedSnapshot['state'], laps: [], updatedAt: Date.parse('2026-11-22T04:22:46Z'), receivedAt: null, retryAt: null });
+const snap = (state: object): FeedSnapshot => ({ status: 'live', delay: 0, state: state as FeedSnapshot['state'], laps: [], pits: [], updatedAt: Date.parse('2026-11-22T04:22:46Z'), receivedAt: null, retryAt: null });
 
 describe('mergeF1', () => {
   it('merges nested objects without losing other keys', () => {
@@ -54,5 +54,43 @@ describe('F1 feed adapter (Las Vegas race snapshot)', () => {
     expect(msgs.every((m) => /Z$|[+-]\d\d:\d\d$/.test(m.date))).toBe(true);
     const w = feedWeather(s)!;
     expect(w.air_temperature).toBeGreaterThan(0);
+  });
+});
+
+describe('out laps', () => {
+  it('treats anything longer than 5 minutes as no lap time', () => {
+    expect(realLap(97.2)).toBe(97.2);
+    expect(realLap(parseLapTime('19:56.697'))).toBeNull();
+    expect(realLap(null)).toBeNull();
+  });
+  it('shows a car leaving the garage as an out lap, not a 19-minute lap', () => {
+    const state = JSON.parse(JSON.stringify(snapshot));
+    const n = Object.keys(state.TimingData.Lines)[0];
+    state.TimingData.Lines[n].LastLapTime = { Value: '19:56.697', Status: 0, OverallFastest: false, PersonalFastest: false };
+    const row = feedRows(snap(state), true).find((r) => String(r.driver.driver_number) === n)!;
+    expect(row.lastLap?.lap_duration).toBeNull();
+    expect(row.lastLap?.is_pit_out_lap).toBe(true);
+    expect(row.lastLapTone).toBe('none');
+  });
+});
+
+describe('pit lane times from the feed', () => {
+  const state = (times: object) => ({ PitLaneTimeCollection: { PitTimes: times } });
+  it('records each new stop, keeping earlier ones as the feed moves on to the next', () => {
+    let pits = addPits([], state({ 1: { RacingNumber: '1', Duration: '22.4', Lap: '14' } }), 1000);
+    expect(pits).toEqual([{ driver: 1, lap: 14, lane: 22.4, at: 1000 }]);
+    // Same stop again: nothing new.
+    expect(addPits(pits, state({ 1: { RacingNumber: '1', Duration: '22.4', Lap: '14' } }), 2000)).toBe(pits);
+    // The driver's next stop replaces the first in the feed, but both are kept here.
+    pits = addPits(pits, state({ 1: { RacingNumber: '1', Duration: '23.1', Lap: '33' }, 44: { RacingNumber: '44', Duration: '21.9', Lap: '20' } }), 3000);
+    expect(pits.map((p) => `${p.driver}/${p.lap}/${p.lane}`)).toEqual(['1/14/22.4', '1/33/23.1', '44/20/21.9']);
+  });
+  it('takes a corrected time for the same stop and ignores empty entries', () => {
+    const pits = addPits([{ driver: 1, lap: 14, lane: 22.4, at: 1 }], state({ 1: { RacingNumber: '1', Duration: '22.6', Lap: '14' }, 5: { RacingNumber: '5', Duration: '', Lap: '' } }), 2);
+    expect(pits).toEqual([{ driver: 1, lap: 14, lane: 22.6, at: 1 }]);
+  });
+  it('turns recorded stops into pit stop rows with the pit lane time only', () => {
+    const s = { ...snap({}), pits: [{ driver: 44, lap: 20, lane: 21.9, at: Date.parse('2026-11-22T04:30:00Z') }] };
+    expect(feedPits(s)).toEqual([{ date: '2026-11-22T04:30:00.000Z', driver_number: 44, lap_number: 20, pit_duration: 21.9, lane_duration: 21.9, stop_duration: null }]);
   });
 });

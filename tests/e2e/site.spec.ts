@@ -989,3 +989,42 @@ test('Live Timing: the FIA feed starts with the newest messages, with Show more 
   expect(await msgs.count()).toBeLessThanOrEqual(first);
   expect(errors).toEqual([]);
 });
+
+test("F1's feed: pit lane times show live, and a car leaving the garage shows Out lap", async ({ page }) => {
+  const snapshot = JSON.parse(readFileSync('tests/fixtures/feed-snapshot.json', 'utf8'));
+  // A car that is out on track (no IN PIT or other status pill in its Last lap cell).
+  const n = Object.keys(snapshot.TimingData.Lines).find((k) => {
+    const l = snapshot.TimingData.Lines[k];
+    return !l.InPit && !l.PitOut && !l.Retired && !l.Stopped;
+  })!;
+  const code = snapshot.DriverList[n].Tla as string;
+  const errors = await setUp(page, new Date('2026-11-22T04:30:00Z'));
+  let send: (topic: string, data: object) => void = () => {};
+  await page.routeWebSocket(/livetiming\.formula1\.com/, (ws) => {
+    send = (topic, data) => ws.send(JSON.stringify({ type: 1, target: 'feed', arguments: [topic, data] }) + '\x1e');
+    ws.onMessage((msg) => {
+      for (const part of String(msg).split('\x1e')) {
+        if (!part) continue;
+        const m = JSON.parse(part);
+        if (m.protocol) ws.send('{}\x1e');
+        if (m.target === 'Subscribe') ws.send(JSON.stringify({ type: 3, invocationId: '0', result: snapshot }) + '\x1e');
+      }
+    });
+  });
+  await page.goto('#/live');
+  await expect.poll(() => page.locator('table.timing tbody tr').count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(20);
+  const pits = page.locator('section[aria-labelledby="pitstops"]');
+  await expect(pits).toContainText('No pit stops yet');
+  send('PitLaneTimeCollection', { PitTimes: { [n]: { RacingNumber: n, Duration: '21.9', Lap: '20' } } });
+  await expect(pits.locator('tbody tr').first()).toContainText(code);
+  await expect(pits.locator('tbody tr').first()).toContainText('21.9 s');
+  await expect(pits).toContainText('Quickest pit lane 21.9 s');
+  // The feed moves on to the same driver's next stop; both stay in the table.
+  send('PitLaneTimeCollection', { PitTimes: { [n]: { RacingNumber: n, Duration: '23.4', Lap: '38' } } });
+  await expect(pits.locator('tbody tr')).toHaveCount(2);
+  send('TimingData', { Lines: { [n]: { LastLapTime: { Value: '19:56.697', Status: 0, OverallFastest: false, PersonalFastest: false } } } });
+  const row = page.locator('table.timing tbody tr', { has: page.locator('a.code', { hasText: code }) });
+  await expect(row).toContainText('Out lap');
+  await expect(row).not.toContainText('19:56');
+  expect(errors).toEqual([]);
+});

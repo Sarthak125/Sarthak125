@@ -18,6 +18,7 @@ const RS = '\x1e';
 export const F1_TOPICS = [
   'Heartbeat', 'ExtrapolatedClock', 'TimingStats', 'TimingAppData', 'WeatherData', 'TrackStatus', 'DriverList',
   'RaceControlMessages', 'SessionInfo', 'SessionData', 'LapCount', 'TimingData', 'TeamRadio', 'LapSeries',
+  'PitLaneTimeCollection',
 ];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -49,6 +50,53 @@ export function mergeF1(target: any, delta: any): any {
 }
 
 const LAPS_KEY = 'pitwall:feed-laps';
+const PITS_KEY = 'pitwall:feed-pits';
+
+/**
+ * Longest believable lap, in seconds. The feed's "last lap" for a car leaving the garage can be the time since its
+ * previous lap (in qualifying, the whole break between parts, e.g. 19:56.697), so anything longer is an out lap.
+ */
+export const LONGEST_LAP = 300;
+export const realLap = (t: number | null): number | null => (t != null && t > 0 && t <= LONGEST_LAP ? t : null);
+
+/** A pit stop seen in the feed: time from pit entry to pit exit, recorded as it was announced. */
+export interface RecordedPit {
+  driver: number;
+  lap: number;
+  /** Seconds in the pit lane. */
+  lane: number;
+  /** When it arrived (ms since epoch). */
+  at: number;
+}
+
+function loadPits(sk: number): RecordedPit[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PITS_KEY) ?? 'null') as { sk: number; pits: RecordedPit[] } | null;
+    return saved && saved.sk === sk && Array.isArray(saved.pits) ? saved.pits : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The stops in F1's PitLaneTimeCollection (it holds each driver's latest one), added to those already recorded. */
+export function addPits(have: RecordedPit[], state: F1State, now: number): RecordedPit[] {
+  const times = state.PitLaneTimeCollection?.PitTimes ?? {};
+  let out = have;
+  for (const k of Object.keys(times)) {
+    const t = times[k];
+    const driver = Number(t?.RacingNumber ?? k);
+    const lap = Number(t?.Lap);
+    const lane = Number(t?.Duration);
+    if (!driver || !lap || !(lane > 0)) continue;
+    const i = out.findIndex((p) => p.driver === driver && p.lap === lap);
+    if (i >= 0) {
+      if (out[i].lane !== lane) out = out.map((p, j) => (j === i ? { ...p, lane } : p));
+      continue;
+    }
+    out = [...out, { driver, lap, lane, at: now }];
+  }
+  return out;
+}
 
 /** Laps recorded earlier on this device for a session (only the latest session is kept). */
 function loadLaps(sk: number): RecordedLap[] {
@@ -81,6 +129,8 @@ export interface FeedSnapshot {
   delay: number;
   state: F1State;
   laps: RecordedLap[];
+  /** Pit stops seen this session (pit lane time), from F1's PitLaneTimeCollection. */
+  pits: RecordedPit[];
   updatedAt: number | null;
   /** When the last timing message arrived from F1 (before any TV delay), for spotting a quiet or stalled feed. */
   receivedAt: number | null;
@@ -107,7 +157,7 @@ class F1LiveFeed {
   private stopTimer: ReturnType<typeof setTimeout> | undefined;
   private notifyQueued = false;
   private listeners = new Set<() => void>();
-  private snap: FeedSnapshot = { status: 'idle', delay: 0, state: {}, laps: [], updatedAt: null, receivedAt: null, retryAt: null };
+  private snap: FeedSnapshot = { status: 'idle', delay: 0, state: {}, laps: [], pits: [], updatedAt: null, receivedAt: null, retryAt: null };
   // TV delay: messages wait here until they are `delay` seconds old, then are applied in order.
   private pending: { at: number; apply: () => void }[] = []; // `at` = when the message arrived
   private drain: ReturnType<typeof setInterval> | undefined;
@@ -197,7 +247,8 @@ class F1LiveFeed {
             // connection or, after a reload, from this device.
             const sk = Number(state.SessionInfo?.Key) || 0;
             const kept = Number(this.snap.state.SessionInfo?.Key) === sk && this.snap.laps.length ? this.snap.laps : loadLaps(sk);
-            this.set({ status: 'live', state, laps: kept, updatedAt: Date.now() });
+            const keptPits = Number(this.snap.state.SessionInfo?.Key) === sk && this.snap.pits.length ? this.snap.pits : loadPits(sk);
+            this.set({ status: 'live', state, laps: kept, pits: addPits(keptPits, state, Date.now()), updatedAt: Date.now() });
           });
         } else if (m.type === 1 && m.target === 'feed' && Array.isArray(m.arguments)) {
           const [topic, data] = m.arguments as [string, any];
@@ -205,6 +256,14 @@ class F1LiveFeed {
           this.later(() => {
             const state = { ...this.snap.state, [topic]: mergeF1(this.snap.state[topic], data) };
             const laps = topic === 'TimingData' ? this.track(state) : null;
+            if (topic === 'PitLaneTimeCollection') {
+              const pits = addPits(this.snap.pits, state, Date.now());
+              if (pits !== this.snap.pits) {
+                this.set({ state, updatedAt: Date.now(), pits });
+                this.savePits();
+                return;
+              }
+            }
             if (laps?.length) {
               const have = new Set(this.snap.laps.map((l) => `${l.driver}-${l.lap}`));
               const fresh = laps.filter((l) => !have.has(`${l.driver}-${l.lap}`));
@@ -248,6 +307,16 @@ class F1LiveFeed {
     }, 5_000);
   }
 
+  private savePits() {
+    const sk = Number(this.snap.state.SessionInfo?.Key) || 0;
+    if (!sk) return;
+    try {
+      localStorage.setItem(PITS_KEY, JSON.stringify({ sk, pits: this.snap.pits }));
+    } catch {
+      // Storage full or blocked: the stops then last until the page is closed.
+    }
+  }
+
   /** Applies a message now, or once it is as old as the TV delay set in Settings. */
   private later(apply: () => void) {
     const delay = liveDelaySeconds();
@@ -286,11 +355,11 @@ class F1LiveFeed {
       done.push({
         driver: n,
         lap: count,
-        time: parseLapTime(l?.LastLapTime?.Value),
+        time: realLap(parseLapTime(l?.LastLapTime?.Value)),
         sectors: sectors.map((s) => parseLapTime(s?.Value || s?.PreviousValue)),
         sectorFlags: sectors.map(flagOf),
         segments: sectors.map((s) => (Array.isArray(s?.Segments) ? s.Segments.map((x: any) => x?.Status ?? null) : [])),
-        pitOut: this.pitOutThisLap.get(n) ?? false,
+        pitOut: (this.pitOutThisLap.get(n) ?? false) || realLap(parseLapTime(l?.LastLapTime?.Value)) == null,
         endedAt: Date.now(),
         trap: Number(l?.Speeds?.ST?.Value) || Number(stats[k]?.BestSpeeds?.ST?.Value) || null,
       });

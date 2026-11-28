@@ -4,8 +4,8 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { FeedSnapshot, RecordedLap } from '../api/f1live';
-import { parseLapTime } from '../api/f1live';
-import type { Lap, OF1Driver, RaceControlMsg, Session, Stint, TeamRadio, Weather } from '../api/openf1';
+import { parseLapTime, realLap } from '../api/f1live';
+import type { Lap, OF1Driver, PitDetail, RaceControlMsg, Session, Stint, TeamRadio, Weather } from '../api/openf1';
 import type { QualiState, TimingRow } from '../hooks/useLiveTiming';
 import { teamColour } from './teams';
 
@@ -121,6 +121,11 @@ function feedStints(n: number, app: any): Stint[] {
 const toneOf = (x: any): Tone => (!x || !x.Value ? 'none' : x.OverallFastest ? 'overall' : x.PersonalFastest ? 'personal' : 'slower');
 
 /** Recorded laps as OpenF1 laps (only laps completed while the page was open). */
+/** Pit stops recorded from the feed, as pit stop rows: pit lane time only (the stationary time is not in the feed). */
+export function feedPits(s: FeedSnapshot): PitDetail[] {
+  return s.pits.map((p) => ({ date: new Date(p.at).toISOString(), driver_number: p.driver, lap_number: p.lap, pit_duration: p.lane, lane_duration: p.lane, stop_duration: null }));
+}
+
 export function feedLaps(s: FeedSnapshot): Lap[] {
   return s.laps.map((r: RecordedLap) => ({
     date_start: r.time != null ? new Date(r.endedAt - r.time * 1000).toISOString() : null,
@@ -152,10 +157,12 @@ export function feedRows(s: FeedSnapshot, isRace: boolean): TimingRow[] {
     const done = num(l.NumberOfLaps) ?? 0;
     const mine = recorded.filter((x) => x.driver_number === n);
     const last = mine.find((x) => x.lap_number === done);
-    const lastTime = parseLapTime(l.LastLapTime?.Value);
-    const lastLap: Lap | undefined = last ?? (lastTime != null ? {
+    const rawLast = parseLapTime(l.LastLapTime?.Value);
+    const lastTime = realLap(rawLast);
+    // A "lap" longer than any real one is a car leaving the garage: shown as an out lap, with no time.
+    const lastLap: Lap | undefined = last ?? (rawLast != null ? {
       date_start: null, driver_number: n, lap_number: done, lap_duration: lastTime,
-      duration_sector_1: null, duration_sector_2: null, duration_sector_3: null, is_pit_out_lap: null,
+      duration_sector_1: null, duration_sector_2: null, duration_sector_3: null, is_pit_out_lap: lastTime == null ? true : null,
     } : undefined);
     const recordedFlags = s.laps.find((x) => x.driver === n && x.lap === done)?.sectorFlags;
     const stints = feedStints(n, app);
@@ -198,7 +205,7 @@ export function feedRows(s: FeedSnapshot, isRace: boolean): TimingRow[] {
       lastLap,
       bestLap: parseLapTime(l.BestLapTime?.Value) ?? parseLapTime(stats[n]?.PersonalBestLapTime?.Value),
       lapsDone: inProgress && done > 0 ? done + 1 : done,
-      lastLapTone: !l.LastLapTime?.Value ? 'none' : l.LastLapTime.OverallFastest ? 'overall' : l.LastLapTime.PersonalFastest ? 'personal' : 'slower',
+      lastLapTone: !l.LastLapTime?.Value || lastTime == null ? 'none' : l.LastLapTime.OverallFastest ? 'overall' : l.LastLapTime.PersonalFastest ? 'personal' : 'slower',
       sectorTone: recordedFlags ?? ['none', 'none', 'none'],
       stint,
       stints,

@@ -166,7 +166,7 @@ export function LiveTiming() {
     <>
       {t.source === 'f1' && (
         <div className="feed-note" role="note">
-          <strong>Live timing straight from Formula 1's feed.</strong> OpenF1 is paused for free users during live sessions, so this page reads F1's own timing instead. Live car positions on the track map, car speed and pit stop times need an F1 TV subscription; they fill in from OpenF1 about 30 minutes after the session.
+          <strong>Live timing straight from Formula 1's feed.</strong> OpenF1 is paused for free users during live sessions, so this page reads F1's own timing instead. Live car positions on the track map, car speed and stationary pit stop times need an F1 TV subscription; they fill in from OpenF1 about 30 minutes after the session. Pit lane times are live.
           <div style={{ marginTop: 8 }}><DelayPicker /> <span className="faint" style={{ fontSize: 12 }}>F1's feed is usually 30 to 60 s ahead of TV.</span></div>
         </div>
       )}
@@ -502,7 +502,11 @@ function TimingTable({ rows, isRace, live, upcoming, fastest, favNum, team, pitL
                   ) : r.status ? (
                     <span className={`pit-pill ${PILL[r.status]}`} title={PILL_TITLE[r.status]}>{r.status}</span>
                   ) : (
+                    l && l.lap_duration == null && l.is_pit_out_lap ? (
+                    <span className="lap-pill tone-none faint" title="First lap out of the garage: no lap time">Out lap</span>
+                  ) : (
                     <span className={`lap-pill tone-${r.lastLapTone === 'slower' ? 'none' : r.lastLapTone}`}>{fmtLap(l?.lap_duration)}</span>
+                  )
                   )}
                 </td>
                 {q ? (
@@ -849,8 +853,9 @@ function PitStops({ pits, drivers, live, fromFeed, favNum, teamNums }: { pits: P
   const lane = (p: PitDetail) => p.lane_duration ?? p.pit_duration ?? null;
   const stationary = stops.map((p) => p.stop_duration).filter((v): v is number => v != null && v > 0);
   const fastest = stationary.length ? Math.min(...stationary) : null;
-  const fastestStop = stops.find((p) => p.stop_duration === fastest);
+  const fastestStop = fastest != null ? stops.find((p) => p.stop_duration === fastest) : undefined;
   const shown = all ? stops : stops.slice(0, 10);
+  const quickestLane = stops.filter((p) => lane(p) != null).sort((a, b) => lane(a)! - lane(b)!)[0];
   const code = (n: number) => drivers.get(n)?.name_acronym ?? `#${n}`;
   const colour = (n: number) => {
     const d = drivers.get(n);
@@ -860,15 +865,18 @@ function PitStops({ pits, drivers, live, fromFeed, favNum, teamNums }: { pits: P
     <section className="card tight" aria-labelledby="pitstops">
       <div className="card-head">
         <h2 className="h2" id="pitstops">Pit stops</h2>
+        {!fastestStop && quickestLane && (
+          <span className="muted">
+            Quickest pit lane <b className="mono">{lane(quickestLane)!.toFixed(1)} s</b> · {code(quickestLane.driver_number)}, lap {quickestLane.lap_number}
+          </span>
+        )}
         {fastestStop && fastest != null && (
           <span className="muted">
             Fastest stop <b className="mono" style={{ color: 'var(--purple)' }}>{fastest.toFixed(1)} s</b> · {code(fastestStop.driver_number)}, lap {fastestStop.lap_number}
           </span>
         )}
       </div>
-      {fromFeed ? (
-        <Empty>Pit stop times are not in Formula 1's free live feed (they need F1 TV). They appear here about 30 minutes after the session, from OpenF1.</Empty>
-      ) : stops.length === 0 ? (
+      {stops.length === 0 ? (
         <Empty>{live ? 'No pit stops yet.' : 'No pit stops recorded for this session.'}</Empty>
       ) : (
         <>
@@ -900,7 +908,7 @@ function PitStops({ pits, drivers, live, fromFeed, favNum, teamNums }: { pits: P
                         {p.stop_duration != null && p.stop_duration > 0 ? (
                           <span className={isFast ? 'lap-pill best' : undefined} title={isFast ? 'Fastest stop of the session' : undefined}>{p.stop_duration.toFixed(1)} s</span>
                         ) : (
-                          <span className="faint" title="OpenF1 usually adds stationary times a few hours after the session">later</span>
+                          <span className="faint" title={fromFeed ? "Not in Formula 1's free feed: it arrives from OpenF1 after the session" : 'OpenF1 usually adds stationary times a few hours after the session'}>later</span>
                         )}
                       </td>
                       <td className="r mono muted">{lane(p) != null ? `${lane(p)!.toFixed(1)} s` : '-'}</td>
@@ -914,7 +922,11 @@ function PitStops({ pits, drivers, live, fromFeed, favNum, teamNums }: { pits: P
           {stops.length > 10 && (
             <button className="tab" style={{ marginTop: 10 }} onClick={() => setAll(!all)}>{all ? 'Show latest 10' : `Show all ${stops.length} stops`}</button>
           )}
-          <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Newest first. Stationary is the time standing still in the box; pit lane is entry to exit, the time a stop really costs. From OpenF1, which may add stationary times a few hours after the session.</div>
+          <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+            {fromFeed
+              ? "Newest first. Pit lane is entry to exit, the time a stop really costs, live from Formula 1's feed. The feed only repeats each driver's latest stop, so earlier stops made before you opened Pit Wall are missing until OpenF1 has the full list, about 30 minutes after the session, with the stationary times."
+              : 'Newest first. Stationary is the time standing still in the box; pit lane is entry to exit, the time a stop really costs. From OpenF1, which may add stationary times a few hours after the session.'}
+          </div>
         </>
       )}
     </section>
